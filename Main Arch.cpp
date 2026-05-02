@@ -2,13 +2,27 @@
 #include <vector>
 #include <string>
 #include <fstream>
-
+#include <windows.h>
+#include <math.h>
 using namespace std;
 
 // --- Data Structures ---
 struct Point {
     int x, y;
 };
+// --- helper ---
+void Draw8Points(HDC hdc, int xc, int yc, int x, int y, COLORREF c)
+{
+    SetPixel(hdc, xc + x, yc + y, c);
+    SetPixel(hdc, xc - x, yc + y, c);
+    SetPixel(hdc, xc + x, yc - y, c);
+    SetPixel(hdc, xc - x, yc - y, c);
+
+    SetPixel(hdc, xc + y, yc + x, c);
+    SetPixel(hdc, xc - y, yc + x, c);
+    SetPixel(hdc, xc + y, yc - x, c);
+    SetPixel(hdc, xc - y, yc - x, c);
+}
 
 // --- 1. File Menu Functions ---
 struct Shape {
@@ -73,18 +87,67 @@ void setShapeColor(int colorValue) {
 }
 
 // --- 3. Lines Menu Functions ---
-void drawLineDDA() {
-    // TODO: Implement DDA line algorithm
+void drawLineDDA(HDC hdc, int x1, int y1, int x2, int y2, COLORREF c)
+{
+    int dx = x2 - x1;
+    int dy = y2 - y1;
+
+    int steps = max(abs(dx), abs(dy));
+
+    double xinc = (double)dx / steps;
+    double yinc = (double)dy / steps;
+
+    double x = x1;
+    double y = y1;
+
+    for (int i = 0; i <= steps; i++)
+    {
+        SetPixel(hdc, round(x), round(y), c);
+        x += xinc;
+        y += yinc;
+    }
 }
 
-void drawLineMidpoint() {
-    // TODO: Implement Midpoint line algorithm
+void drawLineMidpoint(HDC hdc, int x1, int y1, int x2, int y2, COLORREF c) {
+      int dx = x2 - x1;
+    int dy = y2 - y1;
+
+    int d = dx - 2 * dy;
+    int x = x1;
+    int y = y1;
+
+    SetPixel(hdc, x, y, c);
+
+    while (x < x2)
+    {
+        if (d <= 0)
+        {
+            d += 2 * (dx - dy);
+            y++;
+        }
+        else
+            d -= 2 * dy;
+
+        x++;
+        SetPixel(hdc, x, y, c); 
+    }
 }
 
-void drawLineParametric() {
-    // TODO: Implement Parametric line algorithm
-}
+void drawLineParametric(HDC hdc, int x1, int y1, int x2, int y2, COLORREF c)
+{
+    int dx = x2 - x1;
+    int dy = y2 - y1;
 
+    int steps = max(abs(dx), abs(dy)); 
+    double dt = 1.0 / steps;           
+
+    for (double t = 0; t <= 1; t += dt)
+    {
+        int x = x1 + dx * t;
+        int y = y1 + dy * t;
+        SetPixel(hdc, x, y, c);
+    }
+}
 // --- 4. Circles Menu Functions ---
 void drawCircleDirect() {
     // TODO: Implement Direct circle algorithm
