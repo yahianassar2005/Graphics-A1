@@ -1,4 +1,4 @@
-# Graphics Assignment 1
+# Computer Graphics Project
 
 ## Description
 
