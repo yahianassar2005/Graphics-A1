@@ -149,12 +149,30 @@ void drawLineParametric(HDC hdc, int x1, int y1, int x2, int y2, COLORREF c)
     }
 }
 // --- 4. Circles Menu Functions ---
-void drawCircleDirect() {
-    // TODO: Implement Direct circle algorithm
+void drawCircleDirect(HDC hdc, int xc, int yc, int R, COLORREF c) {
+   int x = 0;
+    int y = R;
+
+    while (x <= y)
+    {
+        y = sqrt((double)R * R - x * x);
+        Draw8Points(hdc, xc, yc, x, y, c);
+        x++;
+    }
 }
 
-void drawCirclePolar() {
-    // TODO: Implement Polar circle algorithm
+void drawCirclePolar(HDC hdc, int xc, int yc, int R, COLORREF c) {
+        double theta = 0;
+    double dTheta = 1.0 / R;
+
+    while (theta <= 6.28) // 2 * pi
+    {
+        int x = R * cos(theta);
+        int y = R * sin(theta);
+
+        SetPixel(hdc, xc + x, yc + y, c);
+        theta += dTheta;
+    }
 }
 
 void drawCircleIterativePolar() {
