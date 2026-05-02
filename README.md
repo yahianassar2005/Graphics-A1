@@ -9,7 +9,7 @@ This is a Computer Graphics project implemented in C++ using the Windows API for
 - **File Menu**: Clear screen, save/load shapes data to/from file.
 - **Preferences Menu**: Change window background to white, change mouse cursor shape, set shape color.
 - **Lines Menu**: Draw lines using DDA, Midpoint, and Parametric algorithms.
-- **Circles Menu**:  Direct, Polar, Iterative Polar, Midpoint, Modified Midpoint algorithms.
+- **Circles Menu**: Draw circles using Direct, Polar, Iterative Polar, Midpoint, and Modified Midpoint algorithms.
 - **Ellipse Menu**:  Direct, Polar, Midpoint algorithms.
 - **Curves Menu**:  Cardinal Spline Curve.
 - **Filling Menu**:  Fill circle with lines/circles, fill square with Hermite, fill rectangle with Bezier, convex/non-convex filling, recursive/non-recursive flood fill.

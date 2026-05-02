@@ -175,16 +175,74 @@ void drawCirclePolar(HDC hdc, int xc, int yc, int R, COLORREF c) {
     }
 }
 
-void drawCircleIterativePolar() {
-    // TODO: Implement iterative Polar circle algorithm
+void drawCircleIterativePolar(HDC hdc, int xc, int yc, int R, COLORREF c) {
+    double x = 0, y = R;
+double dTheta = 1.0 / R;
+
+double cosd = cos(dTheta);
+double sind = sin(dTheta);
+
+while (x < y)
+{
+    Draw8Points(hdc, xc, yc, round(x), round(y), c);
+
+    double x1 = x * cosd - y * sind;
+    y = x * sind + y * cosd;
+    x = x1;
+}
 }
 
-void drawCircleMidpoint() {
-    // TODO: Implement Midpoint circle algorithm
+void drawCircleMidpoint(HDC hdc, int xc, int yc, int R, COLORREF c) {
+     int x = 0;
+    int y = R;
+
+    int d = 1 - R;
+
+    Draw8Points(hdc, xc, yc, x, y, c);
+
+    while (x < y)
+    {
+        if (d < 0)
+            d += 2 * x + 3;
+        else
+        {
+            d += 2 * (x - y) + 5;
+            y--;
+        }
+
+        x++;
+        Draw8Points(hdc, xc, yc, x, y, c);
+    }
 }
 
-void drawCircleModifiedMidpoint() {
-    // TODO: Implement modified Midpoint circle algorithm
+void drawCircleModifiedMidpoint(HDC hdc, int xc, int yc, int R, COLORREF c) {
+    int x = 0;
+    int y = R;
+
+    int d = 1 - R;
+    int ch1 = 3; //  2 * x + 3
+    int ch2 = 5 - 2 * R; //  2 * (x - y) + 5
+
+    while (x <= y)
+    {
+        Draw8Points(hdc, xc, yc, x, y, c);
+
+        if (d < 0)
+        {
+            d += ch1;
+            ch2 += 2;
+        }
+        else
+        {
+            d += ch2;
+            ch2 += 4;
+            y--;
+        }
+
+        ch1 += 2;
+        x++;
+    }
+
 }
 
 // --- 5. Ellipse Menu Functions ---
