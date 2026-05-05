@@ -595,7 +595,7 @@ int main() {
                 DrawCardinalSpline(hdc, P, n, tension, 1000);
                 delete[] P;
             } else {
-                cout << "Invalid choice." << endl;
+                cout << "Invalid choice" << endl;
             }
 
             ReleaseDC(GetConsoleWindow(), hdc);
