@@ -34,6 +34,9 @@ Option 2: Build with CMake:
 5. Build the project: `cmake --build .`
 
 This will create an executable named `MainArch.exe`.
+```
+.\MainArch.exe
+```
 
 ## Usage
 
