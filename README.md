@@ -18,13 +18,22 @@ This is a Computer Graphics project implemented in C++ using the Windows API for
 
 ## Build Instructions
 
+Option 1: Direct compile with MinGW/GCC:
+
+```powershell
+cd "path"
+g++ -g "MainArch.cpp" -o "MainArch.exe" -lgdi32
+```
+
+Option 2: Build with CMake:
+
 1. Ensure you have CMake (version 3.28 or higher) and a C++14 compatible compiler installed.
 2. Navigate to the project directory.
 3. Create a build directory: `mkdir build && cd build`
 4. Generate build files: `cmake ..`
 5. Build the project: `cmake --build .`
 
-This will create an executable named `Graphics_A1` (or `Graphics_A1.exe` on Windows).
+This will create an executable named `MainArch.exe`.
 
 ## Usage
 
