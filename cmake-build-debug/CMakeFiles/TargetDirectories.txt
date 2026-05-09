@@ -1,3 +1,0 @@
-C:/Users/hossam/OneDrive/Desktop/graphics/Graphics-A1/cmake-build-debug/CMakeFiles/Graphics_A1.dir
-C:/Users/hossam/OneDrive/Desktop/graphics/Graphics-A1/cmake-build-debug/CMakeFiles/edit_cache.dir
-C:/Users/hossam/OneDrive/Desktop/graphics/Graphics-A1/cmake-build-debug/CMakeFiles/rebuild_cache.dir
