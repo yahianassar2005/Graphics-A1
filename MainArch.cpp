@@ -101,12 +101,14 @@ Vector4 GetHermiteCoeff(double x0, double s0, double x1, double s1)
     Vector4 v(x0, s0, x1, s1);
     return basis * v;
 }
-void DrawHermiteCurve(HDC hdc, Vector2 &P0, Vector2 &T0, Vector2 &P1, Vector2 &T1, int numpoints)
+void DrawHermiteCurve(HDC hdc, Vector2 &P0, Vector2 &T0, Vector2 &P1, Vector2 &T1, int numpoints, COLORREF color = RGB(255,255,255))
 {
     Vector4 xcoeff = GetHermiteCoeff(P0.x, T0.x, P1.x, T1.x);
     Vector4 ycoeff = GetHermiteCoeff(P0.y, T0.y, P1.y, T1.y);
     if (numpoints < 2)
         return;
+    HPEN pen = CreatePen(PS_SOLID, 1, color);
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
     double dt = 1.0 / (numpoints - 1);
     for (double t = 0; t <= 1; t += dt)
     {
@@ -121,6 +123,8 @@ void DrawHermiteCurve(HDC hdc, Vector2 &P0, Vector2 &T0, Vector2 &P1, Vector2 &T
         else
             LineTo(hdc, x, y);
     }
+    SelectObject(hdc, oldPen);
+    DeleteObject(pen);
 }
 // Canvas + stroke log (minimal)
 HWND g_canvas = nullptr;
@@ -135,6 +139,17 @@ static void ensureCanvas();
 static void waitClicks(unsigned n, vector<POINT> &out);
 static void replayOne(HDC hdc, const string &s);
 static void replayAll(HDC hdc);
+
+static void pumpMessages()
+{
+    MSG m;
+    while (PeekMessageA(&m, nullptr, 0, 0, PM_REMOVE))
+    {
+        if (m.message == WM_QUIT) return;
+        TranslateMessage(&m);
+        DispatchMessageA(&m);
+    }
+}
 
 static void rgbAppend(ostringstream &o, COLORREF c)
 {
@@ -518,15 +533,14 @@ void drawEllipseMidpoint(HDC hdc, int xc, int yc, int a, int b, COLORREF c)
 }
 
 // 6. Curves Menu Functions
-void DrawCardinalSpline(HDC hdc, Vector2 P[], int n, double c, int numpix)
+void DrawCardinalSpline(HDC hdc, Vector2 P[], int n, double c, int numpix, COLORREF color = RGB(255,255,255))
 {
-
     double c1 = 1 - c;
     Vector2 T0(c1 * (P[2].x - P[0].x), c1 * (P[2].y - P[0].y));
     for (int i = 2; i < n - 1; i++)
     {
         Vector2 T1(c1 * (P[i + 1].x - P[i - 1].x), c1 * (P[i + 1].y - P[i - 1].y));
-        DrawHermiteCurve(hdc, P[i - 1], T0, P[i], T1, numpix);
+        DrawHermiteCurve(hdc, P[i - 1], T0, P[i], T1, numpix, color);
         T0 = T1;
     }
 }
@@ -1138,11 +1152,7 @@ static void drawCircleOutlineDotted(HDC hdc, double xc, double yc, double R, COL
 
 static void strokedHermite(HDC hdc, Vector2 &P0, Vector2 &T0, Vector2 &P1, Vector2 &T1, int nPts, COLORREF c)
 {
-    HPEN pen = CreatePen(PS_SOLID, 1, c);
-    HGDIOBJ old = SelectObject(hdc, pen);
-    DrawHermiteCurve(hdc, P0, T0, P1, T1, nPts);
-    SelectObject(hdc, old);
-    DeleteObject(pen);
+    DrawHermiteCurve(hdc, P0, T0, P1, T1, nPts, c);
 }
 
 void clipRectanglePoint(HDC hdc, double xmin, double xmax, double ymin, double ymax,
@@ -1377,7 +1387,7 @@ static void replayOne(HDC hdc, const string &s)
                 P[i].y = py;
             }
             if (ok)
-                DrawCardinalSpline(hdc, P, n, tens, 1000);
+                DrawCardinalSpline(hdc, P, n, tens, 1000, RGB(rr, gg, bb));
             delete[] P;
         }
     }
@@ -1780,32 +1790,42 @@ int main()
 
             if (subOption == 1 && hdc)
             {
-                int n;
+                int n = 0;
                 cout << "Enter number of control points (min 4): ";
                 cin >> n;
+                pumpMessages();
 
-                Vector2 *P = new Vector2[n];
-                cout << "Enter points (x y):" << endl;
-                for (int i = 0; i < n; i++)
+                if (n < 4)
                 {
-                    cout << "P[" << i << "]: ";
-                    cin >> P[i].x >> P[i].y;
+                    cout << "Error: Cardinal Spline requires at least 4 control points." << endl;
                 }
+                else
+                {
+                    Vector2 *P = new Vector2[n];
+                    cout << "Enter points (x y):" << endl;
+                    for (int i = 0; i < n; i++)
+                    {
+                        cout << "P[" << i << "]: ";
+                        cin >> P[i].x >> P[i].y;
+                        pumpMessages();
+                    }
 
-                double tension;
-                cout << "Enter tension (0=Catmull-Rom, closer to 1=tighter): ";
-                cin >> tension;
+                    double tension;
+                    cout << "Enter tension (0=Catmull-Rom, closer to 1=tighter): ";
+                    cin >> tension;
+                    pumpMessages();
 
-                DrawCardinalSpline(hdc, P, n, tension, 1000);
-                ostringstream os;
-                os << "SPL " << n << " " << tension << " ";
-                rgbAppend(os, color);
-                for (int i = 0; i < n; ++i)
-                    os << " " << P[i].x << " " << P[i].y;
-                recordStroke(os.str());
-                delete[] P;
+                    DrawCardinalSpline(hdc, P, n, tension, 1000, color);
+                    ostringstream os;
+                    os << "SPL " << n << " " << tension << " ";
+                    rgbAppend(os, color);
+                    for (int i = 0; i < n; ++i)
+                        os << " " << P[i].x << " " << P[i].y;
+                    recordStroke(os.str());
+                    delete[] P;
+                }
             }
-            else
+            else if (subOption != 1)
             {
                 cout << "Invalid choice" << endl;
             }
