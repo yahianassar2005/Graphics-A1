@@ -189,6 +189,44 @@ static string colorFields(COLORREF c)
     return o.str();
 }
 
+static const COLORREF CLIP_WINDOW_COLOR = RGB(0, 255, 255);
+static const COLORREF CLIP_ACCEPT_COLOR = RGB(0, 200, 0);
+static const COLORREF CLIP_REJECT_COLOR = RGB(255, 40, 40);
+static const COLORREF CLIP_ORIGINAL_COLOR = RGB(200, 200, 200);
+
+static void recordDottedRect(double xmin, double xmax, double ymin, double ymax, COLORREF c)
+{
+    ostringstream os;
+    os << "DRECT " << (int)std::lround(xmin) << " " << (int)std::lround(xmax) << " " << (int)std::lround(ymin) << " " << (int)std::lround(ymax) << " " << colorFields(c);
+    recordStroke(os.str());
+}
+
+static void recordDottedCircle(int xc, int yc, int r, COLORREF c)
+{
+    ostringstream os;
+    os << "DCIRC " << xc << " " << yc << " " << r << " " << colorFields(c);
+    recordStroke(os.str());
+}
+
+static void recordPolygonStroke(const vector<POINT> &poly, COLORREF c)
+{
+    if (poly.empty())
+        return;
+    ostringstream os;
+    os << "POLY " << poly.size();
+    for (const auto &p : poly)
+        os << " " << p.x << " " << p.y;
+    os << " " << colorFields(c);
+    recordStroke(os.str());
+}
+
+static void recordPointStroke(int x, int y, COLORREF c)
+{
+    ostringstream os;
+    os << "POINT " << x << " " << y << " " << colorFields(c);
+    recordStroke(os.str());
+}
+
 // 1. File Menu Implementation
 void clearScreen()
 {
@@ -561,6 +599,27 @@ static void InitFillEntries(vector<FillEdgeTableEntry> &table)
     }
 }
 
+static int fillPolyMaxY(const vector<POINT> &poly)
+{
+    int m = INT_MIN;
+    for (const auto &p : poly)
+        m = std::max(m, (int)p.y);
+    return m == INT_MIN ? 0 : m;
+}
+
+static bool isPointInCanvas(int x, int y)
+{
+    if (!g_canvas)
+        return false;
+    RECT rc;
+    GetClientRect(g_canvas, &rc);
+    return x >= 0 && y >= 0 && x < rc.right && y < rc.bottom;
+}
+
+static void drawCircleOutlineDotted(HDC hdc, double xc, double yc, double R, COLORREF c, int segments = 288);
+static void normalizeAABox(double &xmin, double &xmax, double &ymin, double &ymax);
+static void drawAABoxOutline(HDC hdc, double xmin, double xmax, double ymin, double ymax, COLORREF border);
+
 static void ScanEdgeForFill(int x1, int y1, int x2, int y2, vector<FillEdgeTableEntry> &table)
 {
     if (y1 == y2)
@@ -573,7 +632,7 @@ static void ScanEdgeForFill(int x1, int y1, int x2, int y2, vector<FillEdgeTable
     double x = x1;
     const double slopeInv = static_cast<double>(x2 - x1) / (y2 - y1);
     const int height = static_cast<int>(table.size());
-    for (int y = y1; y <= y2; y++)
+    for (int y = y1; y < y2; y++)
     {
         if (y >= 0 && y < height)
         {
@@ -608,16 +667,16 @@ void fillC(int xc, int yc, int r, int q, HDC hdc, COLORREF c)
     {
         for (int x = -r; x <= r; x++)
         {
-            if (x * x + y * y <= r * r)
+            if (x * x + y * y <= 1LL * r * r)
             {
                 bool test = false;
-                if (q == 1 && x >= 0 && y >= 0)
+                if (q == 1 && x >= 0 && y <= 0)
                     test = true;
-                if (q == 2 && x <= 0 && y >= 0)
+                if (q == 2 && x <= 0 && y <= 0)
                     test = true;
-                if (q == 3 && x <= 0 && y <= 0)
+                if (q == 3 && x <= 0 && y >= 0)
                     test = true;
-                if (q == 4 && x >= 0 && y <= 0)
+                if (q == 4 && x >= 0 && y >= 0)
                     test = true;
                 if (test)
                     SetPixel(hdc, xc + x, yc + y, c);
@@ -650,6 +709,8 @@ void fillR(int xmin, int xmax, int ymin, int ymax, HDC hdc, COLORREF c)
 
 void ffR(int x, int y, COLORREF oc, COLORREF nc, HDC hdc)
 {
+    if (!isPointInCanvas(x, y))
+        return;
     if (GetPixel(hdc, x, y) != oc)
         return;
     SetPixel(hdc, x, y, nc);
@@ -667,6 +728,8 @@ void ffI(int x, int y, COLORREF oc, COLORREF nc, HDC hdc)
     {
         POINT p = s.top();
         s.pop();
+        if (!isPointInCanvas(p.x, p.y))
+            continue;
         if (GetPixel(hdc, p.x, p.y) == oc)
         {
             SetPixel(hdc, p.x, p.y, nc);
@@ -692,29 +755,18 @@ void fillP(vector<POINT> v, HDC hdc, COLORREF c)
         for (int i = 0; i < (int)v.size(); i++)
         {
             int j = (i + 1) % v.size();
-            if ((v[i].y < y && v[j].y >= y) || (v[j].y < y && v[i].y >= y))
+            if ((v[i].y <= y && v[j].y > y) || (v[j].y <= y && v[i].y > y))
             {
                 n.push_back(v[i].x + (y - v[i].y) * (v[j].x - v[i].x) / (v[j].y - v[i].y));
             }
         }
         sort(n.begin(), n.end());
-        for (int i = 0; i < (int)n.size(); i += 2)
+        for (int i = 0; i + 1 < (int)n.size(); i += 2)
         {
-            if (i + 1 < (int)n.size())
-            {
-                for (int x = n[i]; x <= n[i + 1]; x++)
-                    SetPixel(hdc, x, y, c);
-            }
+            for (int x = n[i]; x <= n[i + 1]; x++)
+                SetPixel(hdc, x, y, c);
         }
     }
-}
-
-static int fillPolyMaxY(const vector<POINT> &poly)
-{
-    int m = 0;
-    for (const auto &p : poly)
-        m = std::max(m, (int)p.y);
-    return m;
 }
 
 static void FillCircleQuarterWithLines(HDC hdc, int xc, int yc, int r, int q, COLORREF c)
@@ -728,22 +780,22 @@ static void FillCircleQuarterWithLines(HDC hdc, int xc, int yc, int r, int q, CO
             continue;
         int xr = (int)round(sqrt((double)disc));
         int yPix = yc + yr;
-        if (q == 1 && yr >= 0)
+        if (q == 1 && yr <= 0)
         {
             MoveToEx(hdc, xc, yPix, nullptr);
             LineTo(hdc, xc + xr, yPix);
         }
-        else if (q == 2 && yr >= 0)
+        else if (q == 2 && yr <= 0)
         {
             MoveToEx(hdc, xc - xr, yPix, nullptr);
             LineTo(hdc, xc, yPix);
         }
-        else if (q == 3 && yr <= 0)
+        else if (q == 3 && yr >= 0)
         {
             MoveToEx(hdc, xc - xr, yPix, nullptr);
             LineTo(hdc, xc, yPix);
         }
-        else if (q == 4 && yr <= 0)
+        else if (q == 4 && yr >= 0)
         {
             MoveToEx(hdc, xc, yPix, nullptr);
             LineTo(hdc, xc + xr, yPix);
@@ -762,45 +814,143 @@ static void FillCircleQuarterWithCircles(HDC hdc, int xc, int yc, int r, int q, 
 
 void fillCircleWithLines(HDC hdc, int xc, int yc, int r, int quarter, COLORREF c)
 {
+    drawCircleOutlineDotted(hdc, xc, yc, r, RGB(0, 255, 255));
+    recordDottedCircle(xc, yc, r, RGB(0, 255, 255));
+    cout << "[Fill] Circle quarter with lines center=(" << xc << "," << yc << ") radius=" << r << " quarter=" << quarter << "" << endl;
     FillCircleQuarterWithLines(hdc, xc, yc, r, quarter, c);
 }
 
 void fillCircleWithCircles(HDC hdc, int xc, int yc, int r, int quarter, COLORREF c)
 {
+    drawCircleOutlineDotted(hdc, xc, yc, r, RGB(0, 255, 255));
+    recordDottedCircle(xc, yc, r, RGB(0, 255, 255));
+    cout << "[Fill] Circle quarter with concentric circles center=(" << xc << "," << yc << ") radius=" << r << " quarter=" << quarter << "" << endl;
     FillCircleQuarterWithCircles(hdc, xc, yc, r, quarter, c);
+}
+
+static void drawVerticalHermiteCurve(HDC hdc, int x, int y0, int y1, int amplitude, COLORREF c)
+{
+    Vector2 P0(x, y0);
+    Vector2 P1(x, y1);
+    Vector2 T0(amplitude, 0);
+    Vector2 T1(-amplitude, 0);
+    DrawHermiteCurve(hdc, P0, T0, P1, T1, 120, c);
 }
 
 void fillSquareWithHermit(HDC hdc, int xmin, int xmax, int ymin, int ymax, COLORREF c)
 {
-    fillS(xmin, xmax, ymin, ymax, hdc, c);
+    double dxmin = xmin, dxmax = xmax, dymin = ymin, dymax = ymax;
+    normalizeAABox(dxmin, dxmax, dymin, dymax);
+    int side = max((int)(dxmax - dxmin), (int)(dymax - dymin));
+    xmax = (int)dxmin + side;
+    ymax = (int)dymin + side;
+    drawAABoxOutline(hdc, dxmin, dxmax, dymin, dymax, RGB(0, 255, 255));
+    recordDottedRect(dxmin, dxmax, dymin, dymax, RGB(0, 255, 255));
+    cout << "[Fill] Square fill with vertical Hermite curves "
+         << "left=" << (int)dxmin << " top=" << (int)dymin << " side=" << side << endl;
+    int step = max(2, side / 40);
+    int amplitude = max(8, side / 8);
+    for (int x = xmin; x <= xmax; x += step)
+        drawVerticalHermiteCurve(hdc, x, ymin, ymax, amplitude, c);
+}
+
+static void drawHorizontalBezierCurve(HDC hdc, int xmin, int xmax, int y, int offset, COLORREF c)
+{
+    Vector2 P0(xmin, y);
+    Vector2 P1(xmin + (xmax - xmin) / 3, y + offset);
+    Vector2 P2(xmin + 2 * (xmax - xmin) / 3, y - offset);
+    Vector2 P3(xmax, y);
+    int steps = max(40, xmax - xmin);
+    HPEN pen = CreatePen(PS_SOLID, 1, c);
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    for (int i = 0; i <= steps; ++i)
+    {
+        double t = (double)i / steps;
+        double mt = 1.0 - t;
+        double x = mt * mt * mt * P0.x + 3 * mt * mt * t * P1.x + 3 * mt * t * t * P2.x + t * t * t * P3.x;
+        double yy = mt * mt * mt * P0.y + 3 * mt * mt * t * P1.y + 3 * mt * t * t * P2.y + t * t * t * P3.y;
+        int xi = (int)std::lround(x);
+        int yi = (int)std::lround(yy);
+        if (i == 0)
+            MoveToEx(hdc, xi, yi, nullptr);
+        else
+            LineTo(hdc, xi, yi);
+    }
+    SelectObject(hdc, oldPen);
+    DeleteObject(pen);
 }
 
 void fillRectangleWithBezier(HDC hdc, int xmin, int xmax, int ymin, int ymax, COLORREF c)
 {
-    fillR(xmin, xmax, ymin, ymax, hdc, c);
+    double dxmin = xmin, dxmax = xmax, dymin = ymin, dymax = ymax;
+    normalizeAABox(dxmin, dxmax, dymin, dymax);
+    drawAABoxOutline(hdc, dxmin, dxmax, dymin, dymax, RGB(0, 255, 255));
+    recordDottedRect(dxmin, dxmax, dymin, dymax, RGB(0, 255, 255));
+    cout << "[Fill] Rectangle fill with horizontal Bezier curves "
+         << "xmin=" << (int)dxmin << " ymin=" << (int)dymin << " xmax=" << (int)dxmax << " ymax=" << (int)dymax << endl;
+    int height = (int)(dymax - dymin);
+    if (height <= 0)
+        return;
+    int step = max(2, height / 40);
+    int amplitude = max(8, height / 10);
+    for (int y = (int)dymin; y <= (int)dymax; y += step)
+    {
+        int sign = ((y - (int)dymin) / step) % 2 == 0 ? 1 : -1;
+        drawHorizontalBezierCurve(hdc, (int)dxmin, (int)dxmax, y, amplitude * sign, c);
+    }
+}
+
+static void drawPolygonOutline(HDC hdc, const vector<POINT> &poly, COLORREF c)
+{
+    size_t n = poly.size();
+    if (n < 2)
+        return;
+    for (size_t i = 0; i < n; ++i)
+    {
+        POINT a = poly[i], b = poly[(i + 1) % n];
+        drawLineDDA(hdc, (int)a.x, (int)a.y, (int)b.x, (int)b.y, c);
+    }
 }
 
 void fillConvex(HDC hdc, const vector<POINT> &poly, COLORREF c)
 {
     if (poly.size() < 3)
         return;
-    int h = std::max(fillPolyMaxY(poly) + 2, 1200);
+    int h = std::max(fillPolyMaxY(poly) + 2, 1);
     vector<FillEdgeTableEntry> table(h);
+    drawPolygonOutline(hdc, poly, RGB(255, 255, 0));
+    recordPolygonStroke(poly, RGB(255, 255, 0));
     ConvexFill(poly, table, hdc, c);
+    cout << "[Fill] Convex polygon fill with " << poly.size() << " vertices." << endl;
 }
 
 void fillNonConvex(HDC hdc, vector<POINT> poly, COLORREF c)
 {
+    if (poly.size() < 3)
+        return;
+    drawPolygonOutline(hdc, poly, RGB(255, 255, 0));
+    recordPolygonStroke(poly, RGB(255, 255, 0));
     fillP(std::move(poly), hdc, c);
+    cout << "[Fill] Non-convex polygon fill with " << poly.size() << " vertices." << endl;
 }
 
 void fillFloodRecursive(HDC hdc, int x, int y, COLORREF oldC, COLORREF newC)
 {
+    if (oldC == newC)
+    {
+        cout << "[Fill] Flood recursion skipped because old and new colors are the same." << endl;
+        return;
+    }
     ffR(x, y, oldC, newC, hdc);
 }
 
 void fillFloodNonRecursive(HDC hdc, int x, int y, COLORREF oldC, COLORREF newC)
 {
+    if (oldC == newC)
+    {
+        cout << "[Fill] Flood iteration skipped because old and new colors are the same." << endl;
+        return;
+    }
     ffI(x, y, oldC, newC, hdc);
 }
 
@@ -1046,18 +1196,6 @@ static void drawAABoxOutline(HDC hdc, double xmin, double xmax, double ymin, dou
     DeleteObject(pen);
 }
 
-static void drawPolygonOutline(HDC hdc, const vector<POINT> &poly, COLORREF c)
-{
-    size_t n = poly.size();
-    if (n < 2)
-        return;
-    for (size_t i = 0; i < n; ++i)
-    {
-        POINT a = poly[i], b = poly[(i + 1) % n];
-        drawLineDDA(hdc, (int)a.x, (int)a.y, (int)b.x, (int)b.y, c);
-    }
-}
-
 static bool pointInsideDisk(long long px, long long py, long long xc, long long yc, long long R2)
 {
     long long dx = px - xc, dy = py - yc;
@@ -1134,7 +1272,7 @@ static bool clipLineAgainstCircle(int x1, int y1, int x2, int y2, double xc, dou
     return false;
 }
 
-static void drawCircleOutlineDotted(HDC hdc, double xc, double yc, double R, COLORREF c, int segments = 288)
+static void drawCircleOutlineDotted(HDC hdc, double xc, double yc, double R, COLORREF c, int segments)
 {
     if (segments < 16)
         segments = 16;
@@ -1160,16 +1298,21 @@ void clipRectanglePoint(HDC hdc, double xmin, double xmax, double ymin, double y
 {
     normalizeAABox(xmin, xmax, ymin, ymax);
     drawAABoxOutline(hdc, xmin, xmax, ymin, ymax, clipOutline);
+    recordDottedRect(xmin, xmax, ymin, ymax, clipOutline);
+    cout << "[Rectangle clip POINT] window=(" << (int)std::lround(xmin) << "," << (int)std::lround(ymin) << ") - (" << (int)std::lround(xmax) << "," << (int)std::lround(ymax) << ")" << endl;
+    cout << "[Rectangle clip POINT] original point=(" << px << "," << py << ")" << endl;
     double x = px, y = py;
     if (computeCSOutCode(x, y, xmin, xmax, ymin, ymax) == CS_INSIDE)
     {
         cout << "[Rectangle clip POINT] ACCEPT." << endl;
         SetPixel(hdc, px, py, acceptColor);
+        recordPointStroke(px, py, acceptColor);
     }
     else
     {
         cout << "[Rectangle clip POINT] REJECT." << endl;
         SetPixel(hdc, px, py, rejectColor);
+        recordPointStroke(px, py, rejectColor);
     }
 }
 
@@ -1178,15 +1321,24 @@ void clipRectangleLine(HDC hdc, double xmin, double xmax, double ymin, double ym
 {
     normalizeAABox(xmin, xmax, ymin, ymax);
     drawAABoxOutline(hdc, xmin, xmax, ymin, ymax, clipOutline);
+    recordDottedRect(xmin, xmax, ymin, ymax, clipOutline);
+    cout << "[Rectangle clip LINE] window=(" << (int)std::lround(xmin) << "," << (int)std::lround(ymin) << ") - (" << (int)std::lround(xmax) << "," << (int)std::lround(ymax) << ")" << endl;
+    cout << "[Rectangle clip LINE] original line=(" << x1 << "," << y1 << ") -> (" << x2 << "," << y2 << ")" << endl;
     drawLineDDA(hdc, x1, y1, x2, y2, originalColor);
+    ostringstream orline;
+    orline << "LINE_DDA " << x1 << " " << y1 << " " << x2 << " " << y2 << " " << colorFields(originalColor);
+    recordStroke(orline.str());
 
     double cx0 = x1, cy0 = y1, cx1 = x2, cy1 = y2;
     if (cohenSutherlandClip(xmin, xmax, ymin, ymax, cx0, cy0, cx1, cy1))
     {
         int ix0 = (int)std::lround(cx0), iy0 = (int)std::lround(cy0);
         int ix1 = (int)std::lround(cx1), iy1 = (int)std::lround(cy1);
-        cout << "[Rectangle clip LINE] ACCEPT (" << ix0 << "," << iy0 << ") -> (" << ix1 << "," << iy1 << ")." << endl;
+        cout << "[Rectangle clip LINE] ACCEPT new segment=(" << ix0 << "," << iy0 << ") -> (" << ix1 << "," << iy1 << ")" << endl;
         drawLineDDA(hdc, ix0, iy0, ix1, iy1, clippedColor);
+        ostringstream ln;
+        ln << "LINE_DDA " << ix0 << " " << iy0 << " " << ix1 << " " << iy1 << " " << colorFields(clippedColor);
+        recordStroke(ln.str());
     }
     else
     {
@@ -1204,7 +1356,14 @@ void clipRectanglePolygon(HDC hdc, double xmin, double xmax, double ymin, double
     }
     normalizeAABox(xmin, xmax, ymin, ymax);
     drawAABoxOutline(hdc, xmin, xmax, ymin, ymax, clipOutline);
+    recordDottedRect(xmin, xmax, ymin, ymax, clipOutline);
+    cout << "[Rectangle clip POLYGON] window=(" << (int)std::lround(xmin) << "," << (int)std::lround(ymin) << ") - (" << (int)std::lround(xmax) << "," << (int)std::lround(ymax) << ")" << endl;
+    cout << "[Rectangle clip POLYGON] original vertices:";
+    for (const auto &p : polyIn)
+        cout << " (" << p.x << "," << p.y << ")";
+    cout << endl;
     drawPolygonOutline(hdc, polyIn, originalColor);
+    recordPolygonStroke(polyIn, originalColor);
 
     vector<POINT> clipped = clipPolygonRectangle(polyIn, xmin, xmax, ymin, ymax);
     if (clipped.size() < 2)
@@ -1212,8 +1371,12 @@ void clipRectanglePolygon(HDC hdc, double xmin, double xmax, double ymin, double
         cout << "[Rectangle clip POLYGON] REJECT / empty polygon." << endl;
         return;
     }
-    cout << "[Rectangle clip POLYGON] Clipped vertex count: " << clipped.size() << endl;
+    cout << "[Rectangle clip POLYGON] ACCEPT clipped vertices:";
+    for (const auto &p : clipped)
+        cout << " (" << p.x << "," << p.y << ")";
+    cout << endl;
     drawPolygonOutline(hdc, clipped, clippedColor);
+    recordPolygonStroke(clipped, clippedColor);
 }
 
 void clipSquarePoint(HDC hdc, int left, int top, int side,
@@ -1247,16 +1410,21 @@ void clipCirclePoint(HDC hdc, int xc, int yc, int R, int px, int py,
         return;
     }
     drawCircleOutlineDotted(hdc, xc, yc, R, clipOutline);
+    recordDottedCircle(xc, yc, R, clipOutline);
+    cout << "[Circle clip POINT] circle center=(" << xc << "," << yc << ") radius=" << R << endl;
+    cout << "[Circle clip POINT] original point=(" << px << "," << py << ")" << endl;
     long long R2 = 1LL * R * R;
     if (pointInsideDisk(px, py, xc, yc, R2))
     {
         cout << "[Circle clip POINT] ACCEPT." << endl;
         SetPixel(hdc, px, py, acceptColor);
+        recordPointStroke(px, py, acceptColor);
     }
     else
     {
         cout << "[Circle clip POINT] REJECT." << endl;
         SetPixel(hdc, px, py, rejectColor);
+        recordPointStroke(px, py, rejectColor);
     }
 }
 
@@ -1269,7 +1437,13 @@ void clipCircleLine(HDC hdc, int xc, int yc, int R,
         return;
     }
     drawCircleOutlineDotted(hdc, xc, yc, R, clipOutline);
+    recordDottedCircle(xc, yc, R, clipOutline);
+    cout << "[Circle clip LINE] circle center=(" << xc << "," << yc << ") radius=" << R << endl;
+    cout << "[Circle clip LINE] original line=(" << x1 << "," << y1 << ") -> (" << x2 << "," << y2 << ")" << endl;
     drawLineDDA(hdc, x1, y1, x2, y2, originalColor);
+    ostringstream orline;
+    orline << "LINE_DDA " << x1 << " " << y1 << " " << x2 << " " << y2 << " " << colorFields(originalColor);
+    recordStroke(orline.str());
     double ox1, oy1, ox2, oy2;
     if (clipLineAgainstCircle(x1, y1, x2, y2, xc, yc, (double)R, ox1, oy1, ox2, oy2))
     {
@@ -1277,13 +1451,17 @@ void clipCircleLine(HDC hdc, int xc, int yc, int R,
         int ix1 = (int)std::lround(ox2), iy1 = (int)std::lround(oy2);
         if (sqlen(ix1 - ix0, iy1 - iy0) <= 9)
         {
-            cout << "[Circle clip LINE] ACCEPT (near-degenerate)." << endl;
+            cout << "[Circle clip LINE] ACCEPT (near-degenerate) new point=(" << ix0 << "," << iy0 << ")" << endl;
             SetPixel(hdc, ix0, iy0, clippedColor);
+            recordPointStroke(ix0, iy0, clippedColor);
         }
         else
         {
-            cout << "[Circle clip LINE] ACCEPT." << endl;
+            cout << "[Circle clip LINE] ACCEPT new segment=(" << ix0 << "," << iy0 << ") -> (" << ix1 << "," << iy1 << ")" << endl;
             drawLineDDA(hdc, ix0, iy0, ix1, iy1, clippedColor);
+            ostringstream ln;
+            ln << "LINE_DDA " << ix0 << " " << iy0 << " " << ix1 << " " << iy1 << " " << colorFields(clippedColor);
+            recordStroke(ln.str());
         }
     }
     else
@@ -1399,6 +1577,24 @@ static void replayOne(HDC hdc, const string &s)
         fillSquareWithHermit(hdc, x1, x2, y1, y2, RGB(rr, gg, bb));
     else if (tok == "F_RECTB" && iss >> x1 >> x2 >> y1 >> y2 && readC(iss))
         fillRectangleWithBezier(hdc, x1, x2, y1, y2, RGB(rr, gg, bb));
+    else if (tok == "DRECT" && iss >> x1 >> x2 >> y1 >> y2 && readC(iss))
+        drawAABoxOutline(hdc, x1, x2, y1, y2, RGB(rr, gg, bb));
+    else if (tok == "DCIRC" && iss >> xc >> yc >> r && readC(iss))
+        drawCircleOutlineDotted(hdc, xc, yc, r, RGB(rr, gg, bb));
+    else if (tok == "POINT" && iss >> x1 >> y1 && readC(iss))
+        SetPixel(hdc, x1, y1, RGB(rr, gg, bb));
+    else if (tok == "POLY" && iss >> n)
+    {
+        vector<POINT> poly(n);
+        bool ok = true;
+        for (int i = 0; i < n; ++i)
+        {
+            if (!(iss >> poly[i].x >> poly[i].y))
+                ok = false;
+        }
+        if (ok && readC(iss))
+            drawPolygonOutline(hdc, poly, RGB(rr, gg, bb));
+    }
     else if (tok == "F_CVEX" && iss >> n)
     {
         vector<POINT> poly(n);
@@ -1839,34 +2035,39 @@ int main()
             COLORREF color = getDrawColor();
 
             cout << "\n--- Filling Menu" << endl;
-            cout << "1. Circle fill (horizontal lines, quarter 1-4)" << endl;
-            cout << "2. Circle fill (concentric circles + quarter interior)" << endl;
-            cout << "3. Square fill (vertical Hermite blend between ymin/ymax)" << endl;
-            cout << "4. Rectangle fill (horizontal sweep, linear blend xmin-xmax)" << endl;
-            cout << "5. Convex polygon (scan-fill; use screen y >= 0)" << endl;
-            cout << "6. Non-convex polygon" << endl;
-            cout << "7. Recursive flood fill (RGB in console + seed mouse click)" << endl;
-            cout << "8. Non-recursive flood fill (same)" << endl;
+            cout << "1. Fill Circle Quarter With Lines" << endl;
+            cout << "2. Fill Circle Quarter With Concentric Circles" << endl;
+            cout << "3. Fill Square With Vertical Hermite Curves" << endl;
+            cout << "4. Fill Rectangle With Horizontal Bezier Curves" << endl;
+            cout << "5. Convex Polygon Fill" << endl;
+            cout << "6. Non-Convex Polygon Fill" << endl;
+            cout << "7. Recursive Flood Fill" << endl;
+            cout << "8. Non-Recursive Flood Fill" << endl;
             cout << "Choice: ";
             int sub;
             cin >> sub;
 
             if (sub == 1 || sub == 2)
             {
-                int q;
-                cout << "Quarter (1..4): ";
-                cin >> q;
-                cout << "(Mouse) circle center then a point on the rim.\n";
+                cout << "(Mouse) click circle center then a point on the rim." << endl;
                 vector<POINT> pt;
                 waitClicks(2, pt);
-                if ((int)pt.size() >= 2 && hdc && q >= 1 && q <= 4)
+                if ((int)pt.size() >= 2 && hdc)
                 {
                     int xc = pt[0].x, yc = pt[0].y;
                     long long dx = pt[1].x - xc, dy = pt[1].y - yc;
                     int rr = (int)(sqrt(double(dx * dx + dy * dy)) + 0.5);
                     if (rr < 1)
                         rr = 1;
-                    if (sub == 1)
+                    cout << "Quarter convention: 1=Top-Right, 2=Top-Left, 3=Bottom-Left, 4=Bottom-Right (screen y increases downward)." << endl;
+                    int q;
+                    cout << "Quarter (1..4): ";
+                    cin >> q;
+                    if (q < 1 || q > 4)
+                    {
+                        cout << "Invalid quarter. Use 1..4." << endl;
+                    }
+                    else if (sub == 1)
                     {
                         fillCircleWithLines(hdc, xc, yc, rr, q, color);
                         ostringstream of;
@@ -1881,35 +2082,52 @@ int main()
                         recordStroke(of.str());
                     }
                 }
-                else if (q < 1 || q > 4)
-                    cout << "Invalid quarter.\n";
             }
             else if (sub == 3)
             {
-                int xmin, xmax, ymin, ymax;
-                cout << "Enter xmin xmax ymin ymax: ";
-                cin >> xmin >> xmax >> ymin >> ymax;
-                if (hdc)
+                cout << "(Mouse) click two points to define a perfect square." << endl;
+                vector<POINT> pt;
+                waitClicks(2, pt);
+                if ((int)pt.size() >= 2 && hdc)
+                {
+                    int xmin = pt[0].x;
+                    int ymin = pt[0].y;
+                    int dx = pt[1].x - pt[0].x;
+                    int dy = pt[1].y - pt[0].y;
+                    int side = max(abs(dx), abs(dy));
+                    if (dx < 0)
+                        xmin -= side;
+                    if (dy < 0)
+                        ymin -= side;
+                    int xmax = xmin + side;
+                    int ymax = ymin + side;
                     fillSquareWithHermit(hdc, xmin, xmax, ymin, ymax, color);
-                ostringstream of;
-                of << "F_SHER " << xmin << " " << xmax << " " << ymin << " " << ymax << " " << colorFields(color);
-                recordStroke(of.str());
+                    ostringstream of;
+                    of << "F_SHER " << xmin << " " << xmax << " " << ymin << " " << ymax << " " << colorFields(color);
+                    recordStroke(of.str());
+                }
             }
             else if (sub == 4)
             {
-                int xmin, xmax, ymin, ymax;
-                cout << "Enter xmin xmax ymin ymax: ";
-                cin >> xmin >> xmax >> ymin >> ymax;
-                if (hdc)
+                cout << "(Mouse) click two opposite corners of the rectangle." << endl;
+                vector<POINT> pt;
+                waitClicks(2, pt);
+                if ((int)pt.size() >= 2 && hdc)
+                {
+                    int xmin = pt[0].x;
+                    int ymin = pt[0].y;
+                    int xmax = pt[1].x;
+                    int ymax = pt[1].y;
                     fillRectangleWithBezier(hdc, xmin, xmax, ymin, ymax, color);
-                ostringstream of;
-                of << "F_RECTB " << xmin << " " << xmax << " " << ymin << " " << ymax << " " << colorFields(color);
-                recordStroke(of.str());
+                    ostringstream of;
+                    of << "F_RECTB " << xmin << " " << xmax << " " << ymin << " " << ymax << " " << colorFields(color);
+                    recordStroke(of.str());
+                }
             }
             else if (sub == 5)
             {
                 int n;
-                cout << "Vertex count (>=3): ";
+                cout << "Polygon vertex count (>=3): ";
                 cin >> n;
                 if (n < 3)
                 {
@@ -1917,26 +2135,25 @@ int main()
                 }
                 else
                 {
-                    vector<POINT> poly(n);
-                    for (int i = 0; i < n; i++)
+                    cout << "(Mouse) click " << n << " polygon vertices." << endl;
+                    vector<POINT> poly;
+                    waitClicks(n, poly);
+                    if ((int)poly.size() >= n && hdc)
                     {
-                        cout << "P" << i << " (x y): ";
-                        cin >> poly[i].x >> poly[i].y;
-                    }
-                    if (hdc)
                         fillConvex(hdc, poly, color);
-                    ostringstream fc;
-                    fc << "F_CVEX " << n;
-                    for (int i = 0; i < n; ++i)
-                        fc << " " << poly[i].x << " " << poly[i].y;
-                    fc << " " << colorFields(color);
-                    recordStroke(fc.str());
+                        ostringstream fc;
+                        fc << "F_CVEX " << n;
+                        for (int i = 0; i < n; ++i)
+                            fc << " " << poly[i].x << " " << poly[i].y;
+                        fc << " " << colorFields(color);
+                        recordStroke(fc.str());
+                    }
                 }
             }
             else if (sub == 6)
             {
                 int n;
-                cout << "Vertex count (>=3): ";
+                cout << "Polygon vertex count (>=3): ";
                 cin >> n;
                 if (n < 3)
                 {
@@ -1944,44 +2161,51 @@ int main()
                 }
                 else
                 {
-                    vector<POINT> poly(n);
-                    for (int i = 0; i < n; i++)
+                    cout << "(Mouse) click " << n << " polygon vertices." << endl;
+                    vector<POINT> poly;
+                    waitClicks(n, poly);
+                    if ((int)poly.size() >= n && hdc)
                     {
-                        cout << "P" << i << " (x y): ";
-                        cin >> poly[i].x >> poly[i].y;
-                    }
-                    if (hdc)
                         fillNonConvex(hdc, poly, color);
-                    ostringstream fc;
-                    fc << "F_NCX " << n;
-                    for (int i = 0; i < n; ++i){
-                        fc << " " << poly[i].x << " " << poly[i].y;
+                        ostringstream fc;
+                        fc << "F_NCX " << n;
+                        for (int i = 0; i < n; ++i)
+                            fc << " " << poly[i].x << " " << poly[i].y;
+                        fc << " " << colorFields(color);
+                        recordStroke(fc.str());
                     }
-                    fc << " " << colorFields(color);
-                    recordStroke(fc.str());
                 }
             }
             else if (sub == 7 || sub == 8)
             {
-                int obr, obg, obb, nbr, nbg, nbb;
-                cout << "Enter OLD rgb then NEW rgb (6 ints): ";
-                cin >> obr >> obg >> obb >> nbr >> nbg >> nbb;
-                cout << "(Mouse) click seed pixel.\n";
+                cout << "(Mouse) draw a closed boundary first, then click the seed inside it." << endl;
+                cout << "Enter NEW rgb color for fill (3 ints): ";
+                int nr, ng, nb;
+                cin >> nr >> ng >> nb;
                 vector<POINT> pt;
+                cout << "(Mouse) click seed pixel." << endl;
                 waitClicks(1, pt);
                 if ((int)pt.size() >= 1 && hdc)
                 {
                     int x = pt[0].x, y = pt[0].y;
-                    COLORREF oldC = RGB(obr, obg, obb);
-                    COLORREF newC = RGB(nbr, nbg, nbb);
-                    if (sub == 7)
-                        fillFloodRecursive(hdc, x, y, oldC, newC);
+                    COLORREF oldC = GetPixel(hdc, x, y);
+                    COLORREF newC = RGB(nr, ng, nb);
+                    if (oldC == newC)
+                    {
+                        cout << "Seed color is already the new color; nothing to fill." << endl;
+                    }
                     else
-                        fillFloodNonRecursive(hdc, x, y, oldC, newC);
-                    ostringstream ff;
-                    ff << (sub == 7 ? "FLOOD_R " : "FLOOD_I ") << x << " " << y << " " << obr << " " << obg << " " << obb << " ";
-                    ff << nbr << " " << nbg << " " << nbb;
-                    recordStroke(ff.str());
+                    {
+                        if (sub == 7)
+                            fillFloodRecursive(hdc, x, y, oldC, newC);
+                        else
+                            fillFloodNonRecursive(hdc, x, y, oldC, newC);
+                        ostringstream ff;
+                        ff << (sub == 7 ? "FLOOD_R " : "FLOOD_I ") << x << " " << y << " ";
+                        ff << (int)GetRValue(oldC) << " " << (int)GetGValue(oldC) << " " << (int)GetBValue(oldC) << " ";
+                        ff << nr << " " << ng << " " << nb;
+                        recordStroke(ff.str());
+                    }
                 }
             }
             else
@@ -1995,94 +2219,167 @@ int main()
         case 8:
         {
             HDC hdc = GetDC(g_canvas);
-            const COLORREF outline = RGB(0, 220, 90);
-            const COLORREF clipped = RGB(255, 255, 255);
-            const COLORREF original = RGB(120, 120, 120);
-            const COLORREF reject = RGB(255, 40, 40);
+            const COLORREF outline = CLIP_WINDOW_COLOR;
+            const COLORREF clipped = CLIP_ACCEPT_COLOR;
+            const COLORREF original = CLIP_ORIGINAL_COLOR;
+            const COLORREF reject = CLIP_REJECT_COLOR;
 
             cout << "\n--- Clipping and Bonus Menu" << endl;
-            cout << "1. Rectangle clip: point" << endl;
-            cout << "2. Rectangle clip: line (Cohen-Sutherland)" << endl;
-            cout << "3. Rectangle clip: polygon (Sutherland-Hodgman)" << endl;
-            cout << "4. Square clip: point" << endl;
-            cout << "5. Square clip: line" << endl;
-            cout << "6. Circle clip: point" << endl;
-            cout << "7. Circle clip: line (parametric quadratic)" << endl;
-            cout << "8. Happy face (circles + line + Hermite mouth)" << endl;
-            cout << "9. Sad face" << endl;
+            cout << "1. Rectangle Clip Point" << endl;
+            cout << "2. Rectangle Clip Line" << endl;
+            cout << "3. Rectangle Clip Polygon" << endl;
+            cout << "4. Square Clip Point" << endl;
+            cout << "5. Square Clip Line" << endl;
+            cout << "6. Circle Clip Point - Bonus" << endl;
+            cout << "7. Circle Clip Line - Bonus" << endl;
+            cout << "8. Happy Face - Bonus" << endl;
+            cout << "9. Sad Face - Bonus" << endl;
             cout << "Choice: ";
             int sub;
             cin >> sub;
 
             if (sub == 1)
             {
-                double xa, xb, ya, yb;
-                int px, py;
-                cout << "Clip rectangle: xmin xmax ymin ymax, then point px py: ";
-                cin >> xa >> xb >> ya >> yb >> px >> py;
-                clipRectanglePoint(hdc, xa, xb, ya, yb, px, py, outline, clipped, reject);
+                cout << "(Mouse) click two corners for rectangle clipping window." << endl;
+                vector<POINT> rect;
+                waitClicks(2, rect);
+                if (rect.size() >= 2)
+                {
+                    cout << "(Mouse) click point to test." << endl;
+                    vector<POINT> pt;
+                    waitClicks(1, pt);
+                    if (pt.size() >= 1)
+                    {
+                        clipRectanglePoint(hdc, rect[0].x, rect[1].x, rect[0].y, rect[1].y, pt[0].x, pt[0].y, outline, clipped, reject);
+                    }
+                }
             }
             else if (sub == 2)
             {
-                double xa, xb, ya, yb;
-                int x1, y1, x2, y2;
-                cout << "Rectangle xmin xmax ymin ymax, line x1 y1 x2 y2: ";
-                cin >> xa >> xb >> ya >> yb >> x1 >> y1 >> x2 >> y2;
-                clipRectangleLine(hdc, xa, xb, ya, yb, x1, y1, x2, y2, outline, clipped, original);
+                cout << "(Mouse) click two corners for rectangle clipping window." << endl;
+                vector<POINT> rect;
+                waitClicks(2, rect);
+                if (rect.size() >= 2)
+                {
+                    cout << "(Mouse) click line endpoints." << endl;
+                    vector<POINT> ln;
+                    waitClicks(2, ln);
+                    if (ln.size() >= 2)
+                        clipRectangleLine(hdc, rect[0].x, rect[1].x, rect[0].y, rect[1].y, ln[0].x, ln[0].y, ln[1].x, ln[1].y, outline, clipped, original);
+                }
             }
             else if (sub == 3)
             {
-                double xa, xb, ya, yb;
-                int n;
-                cout << "Rectangle xmin xmax ymin ymax, then vertex count n: ";
-                cin >> xa >> xb >> ya >> yb >> n;
-                if (n < 3)
+                cout << "(Mouse) click two corners for rectangle clipping window." << endl;
+                vector<POINT> rect;
+                waitClicks(2, rect);
+                if (rect.size() >= 2)
                 {
-                    cout << "Need at least 3 polygon vertices." << endl;
-                }
-                else
-                {
-                    vector<POINT> poly(n);
-                    for (int i = 0; i < n; ++i)
+                    int n;
+                    cout << "Polygon vertex count (>=3): ";
+                    cin >> n;
+                    if (n < 3)
                     {
-                        cout << "Vertex " << i << " (x y): ";
-                        cin >> poly[i].x >> poly[i].y;
+                        cout << "Need at least 3 polygon vertices." << endl;
                     }
-                    clipRectanglePolygon(hdc, xa, xb, ya, yb, poly, outline, clipped, original);
+                    else
+                    {
+                        cout << "(Mouse) click " << n << " polygon vertices." << endl;
+                        vector<POINT> poly;
+                        waitClicks(n, poly);
+                        if ((int)poly.size() >= n)
+                            clipRectanglePolygon(hdc, rect[0].x, rect[1].x, rect[0].y, rect[1].y, poly, outline, clipped, original);
+                    }
                 }
             }
             else if (sub == 4)
             {
-                int left, top, side, px, py;
-                cout << "Square: left top side, then point px py: ";
-                cin >> left >> top >> side >> px >> py;
-                clipSquarePoint(hdc, left, top, side, px, py, outline, clipped, reject);
+                cout << "(Mouse) click top-left corner, then second point to define square size." << endl;
+                vector<POINT> sq;
+                waitClicks(2, sq);
+                if (sq.size() >= 2)
+                {
+                    int left = sq[0].x;
+                    int top = sq[0].y;
+                    int dx = sq[1].x - sq[0].x;
+                    int dy = sq[1].y - sq[0].y;
+                    int side = max(abs(dx), abs(dy));
+                    if (dx < 0)
+                        left -= side;
+                    if (dy < 0)
+                        top -= side;
+                    cout << "(Mouse) click point to test." << endl;
+                    vector<POINT> pt;
+                    waitClicks(1, pt);
+                    if (pt.size() >= 1)
+                        clipSquarePoint(hdc, left, top, side, pt[0].x, pt[0].y, outline, clipped, reject);
+                }
             }
             else if (sub == 5)
             {
-                int left, top, side, x1, y1, x2, y2;
-                cout << "Square: left top side, then line x1 y1 x2 y2: ";
-                cin >> left >> top >> side >> x1 >> y1 >> x2 >> y2;
-                clipSquareLine(hdc, left, top, side, x1, y1, x2, y2, outline, clipped, original);
+                cout << "(Mouse) click top-left corner, then second point to define square size." << endl;
+                vector<POINT> sq;
+                waitClicks(2, sq);
+                if (sq.size() >= 2)
+                {
+                    int left = sq[0].x;
+                    int top = sq[0].y;
+                    int dx = sq[1].x - sq[0].x;
+                    int dy = sq[1].y - sq[0].y;
+                    int side = max(abs(dx), abs(dy));
+                    if (dx < 0)
+                        left -= side;
+                    if (dy < 0)
+                        top -= side;
+                    cout << "(Mouse) click line endpoints." << endl;
+                    vector<POINT> ln;
+                    waitClicks(2, ln);
+                    if (ln.size() >= 2)
+                        clipSquareLine(hdc, left, top, side, ln[0].x, ln[0].y, ln[1].x, ln[1].y, outline, clipped, original);
+                }
             }
             else if (sub == 6)
             {
-                int xc, yc, R, px, py;
-                cout << "Circle: xc yc R, then point px py: ";
-                cin >> xc >> yc >> R >> px >> py;
-                clipCirclePoint(hdc, xc, yc, R, px, py, outline, clipped, reject);
+                cout << "(Mouse) click circle center, then point on rim to define radius." << endl;
+                vector<POINT> circ;
+                waitClicks(2, circ);
+                if (circ.size() >= 2)
+                {
+                    int xc = circ[0].x;
+                    int yc = circ[0].y;
+                    int R = (int)(sqrt(double((circ[1].x - xc) * (circ[1].x - xc) + (circ[1].y - yc) * (circ[1].y - yc))) + 0.5);
+                    if (R < 1)
+                        R = 1;
+                    cout << "(Mouse) click point to test." << endl;
+                    vector<POINT> pt;
+                    waitClicks(1, pt);
+                    if (pt.size() >= 1)
+                        clipCirclePoint(hdc, xc, yc, R, pt[0].x, pt[0].y, outline, clipped, reject);
+                }
             }
             else if (sub == 7)
             {
-                int xc, yc, R, x1, y1, x2, y2;
-                cout << "Circle: xc yc R, then line x1 y1 x2 y2: ";
-                cin >> xc >> yc >> R >> x1 >> y1 >> x2 >> y2;
-                clipCircleLine(hdc, xc, yc, R, x1, y1, x2, y2, outline, clipped, original);
+                cout << "(Mouse) click circle center, then point on rim to define radius." << endl;
+                vector<POINT> circ;
+                waitClicks(2, circ);
+                if (circ.size() >= 2)
+                {
+                    int xc = circ[0].x;
+                    int yc = circ[0].y;
+                    int R = (int)(sqrt(double((circ[1].x - xc) * (circ[1].x - xc) + (circ[1].y - yc) * (circ[1].y - yc))) + 0.5);
+                    if (R < 1)
+                        R = 1;
+                    cout << "(Mouse) click line endpoints." << endl;
+                    vector<POINT> ln;
+                    waitClicks(2, ln);
+                    if (ln.size() >= 2)
+                        clipCircleLine(hdc, xc, yc, R, ln[0].x, ln[0].y, ln[1].x, ln[1].y, outline, clipped, original);
+                }
             }
             else if (sub == 8)
             {
                 COLORREF fc = getDrawColor();
-                cout << "(Mouse) Happy face: center then rim for radius.\n";
+                cout << "(Mouse) Happy face: center then rim for radius." << endl;
                 vector<POINT> pt;
                 waitClicks(2, pt);
                 if ((int)pt.size() >= 2 && hdc)
@@ -2102,7 +2399,7 @@ int main()
             else if (sub == 9)
             {
                 COLORREF fc = getDrawColor();
-                cout << "(Mouse) Sad face: center then rim for radius.\n";
+                cout << "(Mouse) Sad face: center then rim for radius." << endl;
                 vector<POINT> pt;
                 waitClicks(2, pt);
                 if ((int)pt.size() >= 2 && hdc)
