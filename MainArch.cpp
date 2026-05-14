@@ -130,6 +130,7 @@ void DrawHermiteCurve(HDC hdc, Vector2 &P0, Vector2 &T0, Vector2 &P1, Vector2 &T
 HWND g_canvas = nullptr;
 COLORREF g_bgColor = RGB(30, 30, 38);
 vector<string> g_drawLog;
+static bool g_isReplaying = false;
 
 static int g_waitN = 0;
 static vector<POINT> g_collect;
@@ -176,7 +177,7 @@ COLORREF getDrawColor()
 
 void recordStroke(const string &line)
 {
-    if (!g_canvas)
+    if (!g_canvas || g_isReplaying)
         return;
     g_drawLog.push_back(line);
     InvalidateRect(g_canvas, nullptr, FALSE);
@@ -232,7 +233,10 @@ void clearScreen()
 {
     g_drawLog.clear();
     if (g_canvas)
+    {
         InvalidateRect(g_canvas, nullptr, TRUE);
+        UpdateWindow(g_canvas);
+    }
     cout << "Screen cleared from shapes." << endl;
 }
 
@@ -1293,6 +1297,24 @@ static void strokedHermite(HDC hdc, Vector2 &P0, Vector2 &T0, Vector2 &P1, Vecto
     DrawHermiteCurve(hdc, P0, T0, P1, T1, nPts, c);
 }
 
+static void drawFaceMouth(HDC hdc, int cx, int cy, int R, COLORREF c, bool happy)
+{
+    // Use the curve helper with 5 points so the mouth has a visible arc.
+    const double mouthWidth = std::max(18.0, R * 0.58);
+    const double outerWidth = mouthWidth * 1.15;
+    const double outerY = cy + (happy ? R * 0.22 : R * 0.30);
+    const double cornerY = cy + (happy ? R * 0.16 : R * 0.28);
+    const double midY = cy + (happy ? R * 0.34 : R * 0.12);
+    Vector2 P[5] = {
+        Vector2(cx - outerWidth, outerY),
+        Vector2(cx - mouthWidth, cornerY),
+        Vector2(cx, midY),
+        Vector2(cx + mouthWidth, cornerY),
+        Vector2(cx + outerWidth, outerY),
+    };
+    DrawCardinalSpline(hdc, P, 5, 0.05, 220, c);
+}
+
 void clipRectanglePoint(HDC hdc, double xmin, double xmax, double ymin, double ymax,
                         int px, int py, COLORREF clipOutline, COLORREF acceptColor, COLORREF rejectColor)
 {
@@ -1474,44 +1496,36 @@ void drawHappyFace(HDC hdc, int cx, int cy, int R, COLORREF c)
 {
     if (R < 12)
         return;
+    cout << "[Face] Happy face center=(" << cx << "," << cy << ") radius=" << R
+         << " color=(" << (int)GetRValue(c) << "," << (int)GetGValue(c) << "," << (int)GetBValue(c) << ")" << endl;
     drawCircleMidpoint(hdc, cx, cy, R, c);
-    int eyeR = std::max(2, R / 10);
-    drawCircleMidpoint(hdc, cx - R / 3, cy - R / 5, eyeR, c);
-    drawCircleMidpoint(hdc, cx + R / 3, cy - R / 5, eyeR, c);
-    drawLineDDA(hdc, cx, cy - R / 15, cx, cy + R / 7, c);
-
-    double mw = R / 2.2;
-    double my = cy + R / 4.2;
-    Vector2 P0(cx - mw, my);
-    Vector2 P1(cx + mw, my);
-    Vector2 T0(mw * 1.05, +R / 5.8);
-    Vector2 T1(-mw * 1.05, +R / 5.8);
-    strokedHermite(hdc, P0, T0, P1, T1, 140, c);
+    int eyeR = std::max(2, R / 11);
+    drawCircleMidpoint(hdc, cx - R / 3, cy - R / 4, eyeR, c);
+    drawCircleMidpoint(hdc, cx + R / 3, cy - R / 4, eyeR, c);
+    drawLineDDA(hdc, cx, cy - R / 12, cx, cy + R / 9, c);
+    drawFaceMouth(hdc, cx, cy, R, c, true);
 }
 
 void drawSadFace(HDC hdc, int cx, int cy, int R, COLORREF c)
 {
     if (R < 12)
         return;
+    cout << "[Face] Sad face center=(" << cx << "," << cy << ") radius=" << R
+         << " color=(" << (int)GetRValue(c) << "," << (int)GetGValue(c) << "," << (int)GetBValue(c) << ")" << endl;
     drawCircleMidpoint(hdc, cx, cy, R, c);
-    int eyeR = std::max(2, R / 10);
-    drawCircleMidpoint(hdc, cx - R / 3, cy - R / 5, eyeR, c);
-    drawCircleMidpoint(hdc, cx + R / 3, cy - R / 5, eyeR, c);
-    drawLineDDA(hdc, cx, cy - R / 15, cx, cy + R / 7, c);
-
-    double mw = R / 2.2;
-    double my = cy + R / 3.5;
-    Vector2 P0(cx - mw, my);
-    Vector2 P1(cx + mw, my);
-    Vector2 T0(mw * 1.05, -R / 5.8);
-    Vector2 T1(-mw * 1.05, -R / 5.8);
-    strokedHermite(hdc, P0, T0, P1, T1, 140, c);
+    int eyeR = std::max(2, R / 11);
+    drawCircleMidpoint(hdc, cx - R / 3, cy - R / 4, eyeR, c);
+    drawCircleMidpoint(hdc, cx + R / 3, cy - R / 4, eyeR, c);
+    drawLineDDA(hdc, cx, cy - R / 12, cx, cy + R / 9, c);
+    drawFaceMouth(hdc, cx, cy, R, c, false);
 }
 
 static void replayAll(HDC hdc)
 {
+    g_isReplaying = true;
     for (const auto &s : g_drawLog)
         replayOne(hdc, s);
+    g_isReplaying = false;
 }
 
 static void replayOne(HDC hdc, const string &s)
